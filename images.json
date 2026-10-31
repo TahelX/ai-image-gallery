@@ -1,0 +1,13 @@
+{
+  "title": "AI Image Gallery manifest",
+  "instructions": "Add image paths relative to the repository root, such as images/frame-0001.jpg. Keep filenames simple and descriptive.",
+  "images": [
+    {
+      "id": "frame-0001",
+      "name": "frame-0001.jpg",
+      "src": "images/frame-0001.jpg",
+      "description": "Replace this example with your first image.",
+      "order": 1
+    }
+  ]
+}

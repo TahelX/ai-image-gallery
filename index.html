@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Image Gallery</title>
+<meta name="description" content="A browsable image gallery and manifest for AI-assisted frame review.">
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2c;--muted:#9eabc4;--text:#eef3ff;--line:#293550;--accent:#8ab4ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:28px max(18px,calc((100vw - 1200px)/2));border-bottom:1px solid var(--line);background:#0e1527}
+h1{margin:0 0 6px;font-size:clamp(25px,4vw,38px)}p{margin:8px 0;color:var(--muted)}main{max-width:1200px;margin:auto;padding:22px 18px 60px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:16px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+input[type="search"],input[type="number"],input[type="text"]{background:#0b1020;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px;min-width:0}
+input[type="search"]{flex:1;min-width:220px}button,.button{background:var(--accent);color:#07101f;border:0;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer}
+button.secondary{background:#26334d;color:var(--text)}button:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:13px}.warning{color:#ffd18a}.status{color:#b8d4ff;overflow-wrap:anywhere}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.tile{border:1px solid var(--line);background:var(--panel);border-radius:12px;overflow:hidden;min-width:0}
+.tile img{display:block;width:100%;height:145px;object-fit:contain;background:#070b14;cursor:pointer}
+.tile .meta{padding:9px;font-size:12px;overflow-wrap:anywhere}.tile label{display:flex;gap:7px;align-items:flex-start}
+.tile input{margin-top:3px}.empty{padding:35px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:14px}
+footer{max-width:1200px;margin:auto;padding:0 18px 30px;color:var(--muted);font-size:13px}
+dialog{width:min(95vw,1000px);max-height:92vh;border:1px solid var(--line);border-radius:14px;background:#080d18;color:var(--text);padding:12px}
+dialog::backdrop{background:#000c}dialog img{display:block;max-width:100%;max-height:75vh;margin:auto;object-fit:contain}dialog .dialogbar{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px;overflow-wrap:anywhere}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Image Gallery</h1>
+  <p>A public, static gallery for reviewing video frames and giving an AI agent a single index to browse.</p>
+</header>
+<main>
+  <section class="panel">
+    <h2 style="margin-top:0">Gallery controls</h2>
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search filenames…" aria-label="Search filenames">
+      <button id="selectVisible" class="secondary">Select visible</button>
+      <button id="clearSelected" class="secondary">Clear selection</button>
+      <button id="downloadManifest">Download manifest</button>
+      <button id="downloadSelected" class="secondary">Download selected list</button>
+    </div>
+    <p id="status" class="status">Loading gallery manifest…</p>
+    <p class="note warning">This is a static GitHub Pages site. It cannot upload files to GitHub from this page. Add images to the repository's <code>images/</code> folder and update <code>images.json</code>, then commit and push.</p>
+  </section>
+  <section class="panel">
+    <h2 style="margin-top:0">Agent instructions</h2>
+    <p>Give the agent this page URL and ask it to read <code>images.json</code>, then inspect image URLs in batches supported by its browser/vision tools. A link to this gallery does not force the agent to analyze every image, and usage limits may still apply.</p>
+    <div class="controls">
+      <button id="copyAgentPrompt">Copy agent prompt</button>
+      <button id="copyManifestUrl" class="secondary">Copy manifest URL</button>
+    </div>
+  </section>
+  <section>
+    <div class="controls" style="justify-content:space-between;margin:0 0 12px">
+      <h2 style="margin:0">Images</h2><span id="count" class="note"></span>
+    </div>
+    <div id="grid"><div class="empty">No manifest loaded yet. Add image entries to <code>images.json</code>.</div></div>
+  </section>
+</main>
+<footer>Static site · No images are uploaded from this page · Do not publish private or sensitive images.</footer>
+<dialog id="viewer">
+  <div class="dialogbar"><strong id="viewerName"></strong><button id="closeViewer" class="secondary">Close</button></div>
+  <img id="viewerImage" alt="">
+  <p id="viewerUrl" class="note"></p>
+</dialog>
+<script>
+const $ = id => document.getElementById(id);
+let allImages = [], selected = new Set(), visibleImages = [];
+const baseUrl = new URL(".", window.location.href);
+const manifestUrl = new URL("images.json", baseUrl).href;
+
+function safeUrl(path) {
+  try { return new URL(path, baseUrl).href; } catch { return ""; }
+}
+function escapeText(s) { return String(s ?? ""); }
+function saveText(filename, content) {
+  const blob = new Blob([content], {type:"application/json;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+async function loadManifest() {
+  try {
+    const res = await fetch(manifestUrl, {cache:"no-store"});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : data.images;
+    if (!Array.isArray(list)) throw new Error("Expected an array or an {images: []} object.");
+    allImages = list.map((item, i) => {
+      if (typeof item === "string") item = {src:item};
+      const src = String(item.src || item.url || "").trim();
+      return {id:String(item.id || `image-${i+1}`), name:String(item.name || src.split("/").pop() || `Image ${i+1}`), src, description:String(item.description || ""), order:item.order ?? i+1};
+    }).filter(x => x.src);
+    $("status").textContent = `Loaded ${allImages.length} image entries · Manifest: ${manifestUrl}`;
+    render();
+  } catch (err) {
+    $("status").textContent = `Could not load images.json: ${err.message}. Add it to the repository root.`;
+    $("grid").innerHTML = '<div class="empty">No images found. See README.md for setup instructions.</div>';
+  }
+}
+function render() {
+  const q = $("search").value.trim().toLowerCase();
+  visibleImages = allImages.filter(x => `${x.name} ${x.id} ${x.description}`.toLowerCase().includes(q));
+  $("count").textContent = `${visibleImages.length} shown · ${selected.size} selected · ${allImages.length} total`;
+  const grid = $("grid"); grid.replaceChildren();
+  if (!visibleImages.length) { grid.innerHTML = '<div class="empty">No matching images.</div>'; return; }
+  for (const item of visibleImages) {
+    const card = document.createElement("article"); card.className = "tile";
+    const img = document.createElement("img"); img.loading = "lazy"; img.src = safeUrl(item.src); img.alt = item.name; img.title = "Click to open full size";
+    img.addEventListener("click", () => {
+      $("viewerName").textContent = item.name;
+      $("viewerImage").src = img.src;
+      $("viewerImage").alt = item.name;
+      $("viewerUrl").textContent = img.src;
+      $("viewer").showModal();
+    });
+    const meta = document.createElement("div"); meta.className = "meta";
+    const label = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = selected.has(item.id);
+    cb.addEventListener("change", () => { cb.checked ? selected.add(item.id) : selected.delete(item.id); renderCount(); });
+    const text = document.createElement("span"); text.textContent = `${item.order}. ${item.name}`;
+    label.append(cb, text); meta.append(label);
+    const link = document.createElement("a"); link.href = img.src; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open image"; link.style.display = "inline-block"; link.style.marginTop = "7px";
+    meta.append(link); card.append(img, meta); grid.append(card);
+  }
+}
+function renderCount() { $("count").textContent = `${visibleImages.length} shown · ${selected.size} selected · ${allImages.length} total`; }
+function manifestObject(items=allImages) {
+  return {title:"AI Image Gallery manifest", generatedAt:new Date().toISOString(), count:items.length,
+    instructions:"Images are listed as public URLs relative to this site. Inspect only as many as your vision/browser tools support; ask for batches if needed.",
+    images:items.map(x=>({id:x.id,name:x.name,url:safeUrl(x.src),description:x.description,order:x.order}))};
+}
+$("search").addEventListener("input", render);
+$("selectVisible").addEventListener("click", () => { visibleImages.forEach(x=>selected.add(x.id)); render(); });
+$("clearSelected").addEventListener("click", () => { selected.clear(); render(); });
+$("downloadManifest").addEventListener("click", () => saveText("images-manifest.json", JSON.stringify(manifestObject(), null, 2)));
+$("downloadSelected").addEventListener("click", () => saveText("selected-images.json", JSON.stringify(manifestObject(allImages.filter(x=>selected.has(x.id))), null, 2)));
+$("copyManifestUrl").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(manifestUrl); $("status").textContent = "Manifest URL copied."; }
+  catch { prompt("Copy this manifest URL:", manifestUrl); }
+});
+$("copyAgentPrompt").addEventListener("click", async () => {
+  const promptText = `Review the images in this gallery: ${location.href}\nFirst read the manifest at ${manifestUrl}. Use the direct image URLs listed there. Inspect images in manageable batches supported by your tools, keep track of image order and filenames, and summarize the visual sequence. Do not claim to have inspected images you could not open. If you cannot access the image URLs or manifest, tell me exactly what failed.`;
+  try { await navigator.clipboard.writeText(promptText); $("status").textContent = "Agent prompt copied."; }
+  catch { prompt("Copy this prompt for your agent:", promptText); }
+});
+$("closeViewer").addEventListener("click", () => $("viewer").close());
+$("viewer").addEventListener("click", e => { if(e.target === $("viewer")) $("viewer").close(); });
+loadManifest();
+</script>
+</body>
+</html>
